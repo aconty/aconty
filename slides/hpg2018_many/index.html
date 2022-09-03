@@ -1,0 +1,618 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>Importance Sampling of Many Lights with Adaptive Tree Splitting</title>
+		<meta name="description" content="Importance Sampling of Many Lights with Adaptive Tree Splitting">
+		<meta name="author" content="Alejandro Conty, Christopher Kulla">
+
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/white.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+        <style>
+            body {
+                background: url("img/imageworks.png");
+                background-repeat: no-repeat;
+                background-size: 14%;
+                background-position: bottom 4% left 2%;
+            }
+        </style>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>
+                    <h2>Importance Sampling of Many Lights with Adaptive Tree Splitting</h2>
+                    <p>Alejandro Conty and Christopher Kulla</p>
+                    <p>Sony Pictures Imageworks</p>
+                    <aside class="notes">
+                        Welcome everybody. I'm gonna be presenting our approach
+                        to many lights rendering the we use in production at
+                        Imageworks.
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3>What we are trying to achieve ...</h3>
+                        <img data-src="img/cars.jpg" class="stretch">
+                        <aside class="notes">
+                            This is for scenes where there are too many lights
+                            to iterate and shade per shading point.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/spiral.jpg" class="stretch">
+                        <aside class="notes">
+                            But also for mesh lights like this, which is a
+                            special case of many lights where the triangles are
+                            tiny lights.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/poster.jpg" class="stretch">
+                        <p>For this typical scenario: 363,036 lights</p>
+                        <aside class="notes">
+                            Otherwise we are mostly targeting this typical
+                            scenerio, although this is just a procedural test
+                            case with more than a quarter million lights and
+                            participating media.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <h3>Our method</h3>
+                    <ul>
+                        <li>A <b>BVH tree</b> over the lights is used for importance sampling</li>
+                        <li>There is <b>no learning</b>: based on heuristics</li>
+                        <li>Accounts for energy, distance and orientation, <b>not visibility</b></li>
+                        <li>No grids or caches, low memory overhead</li>
+                    </ul>
+                    <aside class="notes">
+                        Like everybody else we use an acceleration tree for
+                        importance sampling. We don't have grids or spatial
+                        caches and therefore we don't account for visibility,
+                        but we do account for distance, energy and orientation.
+                    </aside>
+                </section>
+                <section>
+                    <h3>Motivation</h3>
+                    <ul>
+                        <li>Originally designed for mesh lights</li>
+                        <ul>
+                            <li>They are large collections of small emitters</li>
+                            <li>Avoid choosing the wrong triangle (distant or pointing away)</li>
+                        </ul>
+                        <li>Usable for collections of arbitrary lights</li>
+                        <li>Avoid grid/learning based methods to:</li>
+                        <ul>
+                            <li>Optimize time to first pixel</li>
+                            <li>Reduce memory footprint and work on volumes</li>
+                        </ul>
+                    </ul>
+                    <aside class="notes">
+                        And the original motivation came because we needed an
+                        efficient way to sample arbitrary mesh lights. With
+                        energy based sampling, almost 50% of the time you're
+                        going to pick a face facing away, and that is a thrown
+                        away sample. Not to mention the distance factor when the
+                        lights are big. And we realized the same approch could
+                        be reused for collections of arbitrary lights.
+                    </aside>
+                </section>
+                <section>
+                    <h3>Our contributions</h3>
+                    <ul>
+                        <li>An approach for building the BVH of lights</li>
+                        <li>An importance measure for light clusters</li>
+                        <li>A split sampling method to reduce variance</li>
+                    </ul>
+                    <aside class="notes">
+                        So our work produced three main contributions. Our tree
+                        construction, the cluster importance function for
+                        sampling, and a thing we called split sampling that I
+                        will introduce at the end.
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3>Building the tree</h3>
+                        <ul>
+                            <li>Top-down approach like for raytracing</li>
+                            <li>Bounding boxes are scanned in all axes for ideal split</li>
+                            <li>A heuristic gives a score for each candidate</li>
+                            <ul>
+                                <li>Account for the size of the box (<b>Surface Area</b>)</li>
+                                <li>Also for the <b>orientation bounds</b></li>
+                            </ul>
+                        </ul>
+                        <aside class="notes">
+                            And I'm gonna start with the tree constraction. It
+                            is a top-down method like for raytring where we are
+                            going to replace the Surface Area Heuristic with our
+                            own, that will use both the size of the cluster and
+                            the orientation bounds. But what are the orientation
+                            bounds?
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Orientation bounds</h4>
+                        <img data-src="img/cone.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>An axis and two angles $\theta_o, \theta_e$.
+                        The latter being the emission extent from the normal:
+                        $\pi/2$ for lambertian emitters, smaller for spot lights.</p>
+                        <aside class="notes">
+                            These exist in angle space, and are meant to bound
+                            the orientation features of the emitters inside a
+                            cluster. Every emitter has a geometric orientation
+                            and an emission spread. Our bounds are represented
+                            with an axis and two angles. The first $\theta_o$
+                            defines a cone where all the emitter geometric
+                            orientations lie, the second $\theta_e$ is the
+                            maximum emission spread. We will go more in detail
+                            in a bit, but I wanted you to keep in mind what we
+                            mean with this concept.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Size of the 3D bounding box</h4>
+                        <ul>
+                            <li>Big boxes with many triangles are bad for
+                            <i>raytracing</i> because the <b>probability of
+                            intersection</b> is high</li>
+                            <li>For us they are bad because they poorly
+                            represent their members when computing
+                            <b>importance</b></li>
+                        </ul>
+                        <aside class="notes">
+                            Like in raytracing we will favor small boxes but for
+                            a different reason, they are better representatives
+                            of their contents when measuring importance. And the
+                            surface area is a good hint for it.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Orientation bounds of the contained emitters</h4>
+                        <ul>
+                            <li>We measure their solid angle impact $M_\Omega$</li>
+                            <li>We also try to keep it small because:</li>
+                            <ul>
+                                <li>They will appear to affect the whole scene otherwise</li>
+                                <li>They misrepresent their contents for the importance measure</li>
+                            </ul>
+                        </ul>
+                        <aside class="notes">
+                            And for the same reasons we want the orientation
+                            bounds as small as possible. We have a measure for
+                            them related to their solid angle that we will see
+                            shortly.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Result: <b>S</b>urface <b>A</b>rea <b>O</b>rientation <b>H</b>euristic</h4>
+                        <p>$\mathrm{Cost}(l, r) = \frac{E(l) M_A(l) M_\Omega(l) +
+                            E(r) M_A(r) M_\Omega(r)}{M_A M_\Omega}$</p>
+                        <p>Proposed cost heuristic for an $l, r$ cluster split
+                        where $M_A$ is the surface area, $M_\Omega$ our
+                        orientation measure and $E_l,E_r$ are the energies on
+                        each side of the split.</p>
+                        <p>We <b>always split in 3D world</b> axes, but taking into
+                        account <b>orientation</b> measure $M_\Omega$
+                        <b>for quality</b>.</p>
+                        <aside class="notes">
+                            This is our cost heuristic, very similar to the SAH
+                            but also including orientation. We balance the
+                            energy instead of the number of primitives because
+                            that is what drives sampling. It is good that the
+                            importance is divided as close to fifty-fifty on
+                            average as possible. This way we will need fewer
+                            random number stretches and we'll find our emitter
+                            faster.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Cluster division and orientation</h4>
+                        <img data-src="img/saoh.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Left split reduces the orientation bounds</p>
+                        <aside class="notes">
+                            We scan the three spatial axes for a split point
+                            minimizing the cost. Measuring the orientation
+                            bounds helps in cases like this, where the left
+                            split is chosen even though by the other measures it
+                            looks very similar to the one on the right. But if
+                            we look at the orientation it is clearly a better
+                            division. But of course this will only make a
+                            difference for mesh lights and other cases where
+                            there space locality implies orientation locality.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>More on orientation bounds</h3>
+                        <img data-src="img/coneex.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>The $\theta_e$ emission part of the bounds will be
+                        cosine weighted. Note our spots are just limited flat
+                        emitters</p>
+                        <aside class="notes">
+                            And what are these orientation bounds, anyway? Here
+                            we see a few examples. Remember there are two
+                            angles, one for the geometric orientation and
+                            another for the spawn of the emission. For instance,
+                            a quad light is only oriented in the normal
+                            direction, but it emits in the whole hemisphere. On
+                            the other hand a sphere or point is oriented
+                            everywhere and the emission range is irrelevant,
+                            while a spot is like a quad with a reduced emission
+                            angle. This is for our particular renderer and might
+                            change in other engines.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Bounds of multiple emitters</h4>
+                        <img data-src="img/mergecone.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Bounds are incrementally expanded to cover multiple
+                        elements in a cluster</p>
+                        <aside class="notes">
+                            Bounds can be aggregated to form the clusters,
+                            there are more details about this in the paper.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Orientation Measure</h4>
+                        <img data-src="img/omega.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Where $\theta_w=\min(\theta_o + \theta_e,\pi)$</p>
+                        <aside class="notes">
+                            And for the tree construction we just saw, they can
+                            be measured. It is just the solid angle of the
+                            orientation disc plus the cosine weighted portion
+                            expanded by the emission angle. There is a very
+                            simple solution of this integral in the paper.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>Tree traversal</h3>
+                        <ul>
+                            <li>An <b>importance function</b> directs the emitter selection</li>
+                            <li>At each branch we pick between left or right</li>
+                            <li>Then stretch the random number and continue recursively</li>
+                            <li>We choose the emitter with a <b>single random
+                            number</b> <i>(sample warping)</i></li>
+                        </ul>
+                        <aside class="notes">
+                            And we finally get to the importance function, which
+                            motivates all we did in the tree. This function will
+                            give us some number on a branch from the tree so we
+                            can stochasticly decide between left or right to
+                            traverse the tree, recursively stretching a random
+                            number.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Cluster tree</h4>
+                        <img data-src="img/tree.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Importance measure changes with shading point</p>
+                        <aside class="notes">
+                            So every node in our tree will measure differently
+                            depending on the shading point. Mostly with
+                            distance, but there is more to it.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>Importance Function</h3>
+                        <ul>
+                            <li>A product of three factors $B \cdot G \cdot O \cdot E$</li>
+                            <ul>
+                                <li>$B$: A simple BSDF approximation</li>
+                                <li>$G$: The geometric term $(1/d^2)$</li>
+                                <li>$O$: The emitter orientation factor</li>
+                                <li>$E$: Total energy inside the cluster</li>
+                            </ul>
+                        </ul>
+                        <aside class="notes">
+                            Our function is the product of these four components,
+                            where the first BSDF factor could be omitted, but we
+                            recommend using at least the cosine term of the
+                            irradiance.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Conservative angles</h4>
+                        <img data-src="img/uncert.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Varying with the cluster size, the uncertainty angle
+                        $\theta_u$ has to be subtracted when using the
+                        center.</p>
+                        <aside class="notes">
+                            I'm going to be using angles of the segment from the
+                            shading point to the cluster center relative to the
+                            shading normal and the orientation bounds axis. But
+                            there is a potential error that grows with the size
+                            of the cluster because the actual emitter position
+                            is unknown inside the cluster. Therefore, we have
+                            this uncertainty angle that we have to subtract to
+                            be conservative. We'll keep this in mind in our
+                            equations.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>BSDF Approximation</h4>
+                        <ul>
+                            <li>Can be as simple as a diffuse term</li>
+                            <li>Include irradiance $|\cos\theta_i|$</li>
+                            <ul>
+                                <li>But remember to subtract $\theta_u$ from $\theta_i$!</li>
+                            </ul>
+                            <li>Or you can use a <i>BSDF proxy</i></li>
+                            <ul>
+                                <li>Come to our talk next week!</li>
+                            </ul>
+                        </ul>
+                        <aside class="notes">
+                            The BSDF term can be as simple as a constant, but
+                            should at least have the irradiance cosine properly
+                            computed accounting for the uncertainty angle. Or
+                            you can use a more precise BSDF approximation. We'll
+                            be talking about that next week at siggraph.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>The orientation factor</h4>
+                        <img data-src="img/oimp.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <aside class="notes">
+                            There are more details in the paper about the
+                            orientation term, but we can summarize it as the
+                            cosine of the angle to the inner orientation cone
+                            clipping by the emission angle. But also subtract
+                            the uncertainty. That cosine is the reason why we
+                            cosine weight our bounds measure in the tree
+                            construction. We are assuming lambertian emitters.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>The equation</h4>
+                        <ul>
+                            <li>$I = \frac{f_a |\cos\theta_i|\ \cos(\theta)\ E}{d^2}$</li>
+                            <li>$\theta_u$ needs to be subtracted from $\theta_i$ and $\theta$</li>
+                            <li>If $\theta > \theta_e$ then $I$ is zero</li>
+                            <li>For participating media:</li>
+                            <ul>
+                                <li>Geometric decay is linear due to line integral ($1/d$)</li>
+                                <li>Angle to bounds $\theta$ comes from a maximization formula (<i>see paper</i>)</li>
+                            </ul>
+                        </ul>
+                        <aside class="notes">
+                            So this is a compact view of the importance
+                            function. It changes for volumes like the distance
+                            decay is linear and the orientation factor requires
+                            a bit more work but the details are in the paper and
+                            I'm not going to get into more detail here.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <h3>Orientation matters</h3>
+                    <img data-src="img/torus.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                    <p>Faces in the green box are more important</p>
+                    <aside class="notes">
+                        You may be wondering what the orientation contributes,
+                        but it is specially important for mesh lights. If the
+                        shading point is far away, the distance will be almost
+                        the same for these two highlighted boxes, and it is the
+                        orientation that leads us to the good one.
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3>Importance comparison</h3>
+                        <img data-src="img/buddha.jpg" class="stretch">
+                        <aside class="notes">
+                            For instance, this is lighting from a tubular mesh.
+                            You can see here how going from simple energy based
+                            sampling to accounting for the distance improves the
+                            result, but factoring in the orientation we get an
+                            even greater improvement.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Applied to volumes</h3>
+                        <img data-src="img/volume.jpg" class="stretch">
+                        <aside class="notes">
+                            And just to show off, this is the improvement on
+                            participating media.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>Adaptive sampling splitting</h3>
+                        <ul>
+                            <li>Our importance measure is weak when the cluster is near</li>
+                            <ul>
+                                <li>$1/d^2$ will vary too much and differ from the center</li>
+                                <li>The uncertainty angle will be too big</li>
+                            </ul>
+                            <li>For single sample mesh lights we just clamp $d$
+                            to a fraction of the cluster's bounding sphere radius</li>
+                        </ul>
+                        <aside class="notes">
+                            You may have noticed already that our importance
+                            function is not very meaningful if the cluster is
+                            very close. If we have to live with just one sample
+                            like with mesh lights we just clamp the distance to
+                            avoid peaks.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>For many lights it can be improved</h4>
+                        <ul>
+                            <li>Use more than just 1 random light for a shading point</li>
+                            <li>If a cluster is too big sample both sub-branches</li>
+                            <ul>
+                                <li>Don't choose one or the other</li>
+                                <li>The smaller clusters will yield a more reliable importance</li>
+                            </ul>
+                            <li>Keep splitting until a heuristic says otherwise</li>
+                            <li>It is better than just increasing SPP</li>
+                        </ul>
+                        <aside class="notes">
+                            But for the scene lights there is a better solution:
+                            pick more than just one light. And we do that with
+                            another heuristic. If the cluster is too big and too
+                            close don't take a random light from it, go to the
+                            children and sample one from each. This is repeated
+                            until the cluster is considered small enough viewed
+                            from the shading point. As it turns out, this is
+                            better than just increasing samples per pixel.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Split sampling</h4>
+                        <img data-src="img/splitlights.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Nearby clusters are more likely to be split</p>
+                        <aside class="notes">
+                            On the left you see an example of all the leaf
+                            clusters of some tree, and on the right you see the
+                            sixteen chosen clusters to sample for that shading
+                            point. That is sixteen shadow rays to random lights
+                            from those clusters. This is similar to a light cut,
+                            except we select a much smaller subset and we keep
+                            going stochastically so it is unbiased. This helps a
+                            lot because when you have nearby 
+                            lights you better shade them deterministically or
+                            you'll get a lot of variance. And leave the
+                            randomness to less important groups of lights.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Predicted variance: our split heuristic</h4>
+                        <ul>
+                            <li>First we record energy variance $V[e]$ in every cluster</li>
+                            <li>Then variance of the geometric term from the shading point
+                                $V[g] = \frac{b^3 - a^3}{3 (b - a) a^3 b^3} - \frac{1}{a^2 b^2}$</li>
+                            <li>$\sigma^2 = \left(V[e] V[g] + V[e] E[g]^2 + E[e]^2 V[g]\right)\ N^2$</li>
+                            <ul>
+                                <li>$N$ is the number of emitters in the cluster</li>
+                                <li>$a, b$ are the minimum and maximum distances
+                                given the cluster</li>
+                            </ul>
+                        </ul>
+                        <aside class="notes">
+                            We decide the split sampling with a simple guess for
+                            the variance of the contributions inside a cluster.
+                            We reduced it to an analitical guess for the
+                            variance of the geometric term and the recorded
+                            energy variance of the emitters in the cluster. This
+                            expression gives you a number from zero to infinty
+                            that you can easily map to a zero-one range and give
+                            the user a slider to choose how aggressive the
+                            splitting is. We call this light sampling rate in
+                            our software.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Effect of splitting</h3>
+                        <img data-src="img/stones.jpg" class="stretch">
+                        <p>This scene contains 10,000 lights. On the second
+                        frame split sampling is using around 20 lights per
+                        shading point</p>
+                        <aside class="notes">
+                            Our threshold mapping goes from zero, where only one
+                            random light is shaded, to one, where all the lights
+                            are shaded (not a good idea). In this scene there is
+                            a spiral of ten thousand lights over equally as many
+                            smooth objects. You can see there is a sweet spot
+                            where you get a clean render in a reasonable time.
+                            While the right most square, using only one light,
+                            is awfully noisy. Unfortunatelly this threshold
+                            changes from scene to scene, but is quite intuitive
+                            to set it up so there might be an automatic way. We
+                            just haven't looked into it yet.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/citycomp.jpg" class="stretch">
+                        <aside class="notes">
+                            And you can see in out procedural city how using
+                            split sampling in the bottom row is better than just
+                            increasing samples per pixel.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/million.jpg" class="stretch">
+                        <p>A million lights on a Cornell box. Blue areas shade
+                        2-3 lights while the top ones in red shade 28.</p>
+                        <aside class="notes">
+                            This is a stress test where we put a million lights
+                            on the ceiling of a cornell box. Looks like an area
+                            light but it is a point light grid as you see in the
+                            zoomed detail. On the right we show a heat map
+                            showing the number of shaded lights returned from
+                            the split that goes from two at the bottom to almost
+                            thirty on the ceiling. The image renders in just a
+                            few minutes.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <p>That's it!</p>
+                    <aside class="notes">
+                        And that's about it. I got permission to show a work in
+                        progress production asset.
+                    </aside>
+                </section>
+                <section>
+                    <img data-src="img/smacity.jpg" class="stretch">
+                    <p>36,000 mesh lights 125spp, 27 shadow rays per sample</p>
+                    <aside class="notes">
+                        Nothing final. I randomly grabbed a temporary setup and
+                        rendered it myself. The interesting part is the
+                        thirtysix thousand neon lights, that is, mesh lights.
+                        And it is rendered with an average of 27 shadow rays per
+                        sample and a hundred twenty five samples per pixel. Not
+                        too much and it is quite clean.
+                    </aside>
+                </section>
+				<section>
+                    <h2>Thanks for listening!</h2>
+                    <p>Questions?</p>
+                </section>
+			</div>
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info about config & dependencies:
+			// - https://github.com/hakimel/reveal.js#configuration
+			// - https://github.com/hakimel/reveal.js#dependencies
+			Reveal.initialize({
+				history: true,    // useful when editing to reload the current page instead of navigating from the beginning
+				slideNumer: true, // doesn't seem to show up.
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+                    { src: 'plugin/math/math.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } }
+				]
+			});
+		</script>
+	</body>
+</html>

@@ -1,0 +1,669 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>Fast Product Importance Sampling of Environment Maps</title>
+		<meta name="description" content="A production friendly technique for BSDF and Environment Maps product sampling">
+		<meta name="author" content="Alejandro Conty, Pascal Lecocq">
+
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/white.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+        <style>
+            body {
+                background: url("img/imageworks.png");
+                background-repeat: no-repeat;
+                background-size: 14%;
+                background-position: bottom 4% left 2%;
+            }
+        </style>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>
+                    <h2>Fast Product Importance Sampling of Environment Maps</h2>
+                    <p>Alejandro Conty and Pascal Lecocq</p>
+                    <p>Sony Pictures Imageworks</p>
+                </section>
+				<section>
+                    <h3>This talk does not contain nuclear launch codes</h3>
+                    <p>Feel free to record</p>
+                </section>
+                <section>
+                    <section>
+                        <h3>Our topic: Lighting with an environment map</h3>
+                        <ul>
+                            <li>Photographs of the sky or interiors</li>
+                            <li>Very common in VFX to integrate CG into live action</li>
+                            <li>... but also in animation to get natural lighting</li>
+                            <li>Some examples below</li>
+                        </ul>
+                        <aside class="notes">
+                            This work is closely related to the previous
+                            presentation. Rather than overlapping, it is
+                            complementary. But since we have already been
+                            introduced to the topic, let's just say IBL lighting
+                            is an important production tool, specially for VFX.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/km2-jungle-crop1.jpg">
+                        <p style="font-size:20px">Jungle scene from <em>Kingsman: Golden Circle</em>. &#9400; 2017, 20th Century Fox. All rights reserved.</p>
+                        <aside class="notes">
+                            At imageworks we've been using importance sampled
+                            IBL maps for a long time ...
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/smurfs2011.jpg">
+                        <p style="font-size:20px">Scene from <em>Smurfs The Movie</em>. &#9400; 2011, Sony Pictures. All rights reserved.</p>
+                        <aside class="notes">
+                            ... starting with the first Smurfs movie.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/buddha_diff_imp.jpg" class="stretch" style="margin-bottom:0">
+                        <p>IBL importance sampling is responsible for focusing on
+                        the bright areas and keep low variance. If we disable it
+                        ...</p>
+                        <aside class="notes">
+                            And this synthetic scene will demonstrate ...
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/buddha_diff_noimp.jpg" class="stretch" style="margin-bottom:0">
+                        <p>... it is horrible!</p>
+                        <aside class="notes">
+                            ... what happens without importance sampling.
+                        </aside>
+                    </section>
+                </section>
+                <!--
+                <section>
+                    <h3>What is the good old approach?</h3>
+                    <ul>
+                        <li>Precomputed 2D CDF tables over the sphere</li>
+                        <li>Orientation and view independent</li>
+                        <li>Very fast</li>
+                        <li>Will focus sampling on bright areas</li>
+                    </ul>
+                    <aside class="notes">
+                        We normally just compute a 2D importance table mapped
+                        onto the sphere so samples are focused on bright spots
+                        to reduce variance.
+                    </aside>
+                </section>
+                -->
+				<section>
+                    <section>
+                        <h3>Motivation</h3>
+                        <ul>
+                            <li>Old approach: <b>Precomputed</b> 2D CDF tables</li>
+                            <li><b>Orientation</b> and <b>view</b> independent</li>
+                        </ul>
+                        <p>Why going through the trouble?</p>
+                        <p>Isn't simple importance sampling good enough?</p>
+                        <aside class="notes">
+                            Other than ignoring the occlusion, this approach,
+                            although effective, has a couple of limitations.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Problem 1: sampling the hidden half of the environment</h4>
+                        <img data-src="img/opaqueocc.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <aside class="notes">
+                            First, it will insist on generating samples on the
+                            non visible hemisphere for opaque surfaces. Or close
+                            to the grazing angle where the cosine term makes
+                            them irrelevant.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Problem 2: narrow BSDF lobes</h4>
+                        <img data-src="img/narrowlobe.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <aside class="notes">
+                            But if the BSDF is smooth it gets even worse because
+                            only a small portion of the environment is relevant.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>Problem 3: multiple hot spots on the environment</h4>
+                        <img data-src="img/twosuns.jpg" style="margin-bottom:0">
+                        <p>We need to avoid samples on the wrong hotspot!</p>
+                        <aside class="notes">
+                            We can see in this example how, a badly oriented
+                            hotspot can ruin the quality when we don't take into
+                            account the orientation and the BSDF.
+                        </aside>
+                    </section>
+                </section>
+                <section id="fragments">
+                    <h3>Our Goals</h3>
+                    <ul>
+                    	<li class="fragment">Draw samples in the relevant <b>IBL &#215 BSDF </b> areas</li>
+                        <li class="fragment">Use little extra memory
+                            <ul>
+                                <li>We shouldn't keep one importance table for every
+                                possible normal orientation</li>
+                            </ul>
+                        </li>
+                        <li class="fragment">Easy integration: implemented in the environment sample method</li>
+                        <li class="fragment">Low overhead, vectorizable code, SIMD</li>
+                    </ul>
+                    <aside class="notes">
+                        We want to sample the product of the BSDF and the
+                        environment without: using extra memory, altering our
+                        API, and in a vectorizable way for performance.
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3>The Idea</h3>
+                        <h4>Before rendering</h4>
+                        <ul>
+                            <li>Divide the sampling table in two levels</li>
+                            <li>Precompute the lower high resolution level as usual</li>
+                            <li>Make the upper level a downsized version of the original</li>
+                        </ul>
+                        <aside class="notes">
+                            So we're gonna divide the importance table in two
+                            levels where the original hi-res image is split in
+                            smaller patches and the upper level is a downsized
+                            version of it.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>The hierarchy</h4>
+                        <img data-src="img/opttwolevels.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <aside class="notes">
+                            Every sub-patch of the original map corresponds to a
+                            pixel on the very small upper level. This is
+                            computed before the render starts.
+                        </aside>
+                    </section>
+                    <section>
+                        <h4>At render time</h4>
+                        <ol>
+                            <li>Multiply a copy of the upper level by the BSDF</li>
+                            <li>Sample the result as a CDF to select a patch in original map</li>
+                            <li>Finally sample the selected patch to get a direction</li>
+                        </ol>
+                        <aside class="notes">
+                            If we build a CDF from the upper level multiplied by
+                            the BSDF, then we can choose a hi-res patch
+                            proportionally to the product importance and then
+                            sample the final direction from the selected patch.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>The product happens in the upper level</h3>
+                        <img data-src="img/grid.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>We cannot rebuild a big importance table for every
+                        shading point, but maybe we can build a 12x12 one</p>
+                        <aside class="notes">
+                            And we do this because computing a full resoltion
+                            product importance table for every shading point is
+                            not reasonable at all. But a small 12 by 12 table
+                            might be possible with the right BSDF
+                            simplification.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Very few pixels: make the most of them</h3>
+                        <img data-src="img/clarberg_alt.png" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Using [Clarberg 2008] area preserving sphere
+                        parametrization we ensure all pixels cover equal solid
+                        angle (although distorted)</p>
+                        <aside class="notes">
+                            The upper table will be small so we use Clarberg's
+                            sphere parametrization to avoid wasting any pixels.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Keep a downsized copy of the environment map</h3>
+                        <img data-src="img/gridsky.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>This is precomputed and never changes during the render</p>
+                        <aside class="notes">
+                            We take the upper level, fixed for the whole render
+                            ...
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Evaluate an approximation of the BSDF</h3>
+                        <img data-src="img/skybsdf.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>We evaluate a conservative approximation of the BSDF
+                        after shading</p>
+                        <aside class="notes">
+                            ... then we evaluate the BSDF approximation, which
+                            here looks like some diffuse plus a spec lobe ...
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Multiply together to get the final CDF</h3>
+                        <img data-src="img/skybsdfprod.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <p>Finally the product gives us the CDF to select
+                        a patch in the original environment map</p>
+                        <aside class="notes">
+                            ... and we multiply them together. Now we have that
+                            CDF to choose one of the hi-res patches.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <h3>How expensive is this</h3>
+                    <ul>
+                        <li>We are evaluating the product at <b>144</b> directions</li>
+                        <li>Generating <b>576 bytes</b> of <b>CDF</b> size</li>
+                    </ul>
+                    <p class="fragment" style="color:#FF0000" data-fragment-index="0"> <b> But production BSDFs are too expensive! </b></p>
+                    <ul>
+                        <li class="fragment" data-fragment-index="1" >We need a simple proxy approximation</li>
+                        <li class="fragment" data-fragment-index="1" >Even better if we can use <b>SIMD</b> instructions</li>
+                    </ul>
+                    <aside class="notes">
+                        To prepare for sampling we will need to compute the
+                        product 144 times and generate 576 bytes worth of CDF.
+                        (next) But we cannot do this with a production BSDF.
+                        (next) We need a simple approximation, (next) and we
+                        better use all the simd lanes.
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3>BSDF proxy</h3>
+                        <p>We make the assumption that all our lobes revolve
+                        around four main axes</p>
+                        <ul>
+                            <li>Normal direction (diffuse lobes)</li>
+                            <li>Opposite normal direction (translucent lobes)</li>
+                            <li>Reflected ray (reflection lobes)</li>
+                            <li>Refracted ray (refraction lobes)</li>
+                        </ul>
+                        <aside class="notes">
+                            To create an approximation we assume the BSDF will
+                            be a collection of smooth lobes around these four
+                            implicit directions.
+                        </aside>
+                    </section>
+                    <section>
+                        <h2 style="margin:0">Our BSDF proxy visually</h2>
+                        <p  style="margin:0;">Our BSDF proxy reduces multiple
+                        lobes to single isotropic lobe around each axis (2 diffuses + 2 GGX) </p>
+                        <img data-src="img/proxy.svg" width="60%" style="background:none; border:none; box-shadow:none; margin:0">
+                        <aside class="notes">
+                            Which are: the normal, the opposite normal,
+                            reflected and refracted rays. All of them using the
+                            macro-normal of the surface. We add up the weights
+                            and average the roughnesses to produce 2 diffuse lobes 
+							and 2 GGX lobe  to act as proxy.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>In numbers ...</h3>
+                        <ul>
+                            <li><b>4 floats</b> of accumulated weight</li>
+                            <li><b>2 floats</b> for the reflection/refraction roughnesses</li>
+                            <li><b>1 float</b> for the IOR</li>
+                        </ul>
+                        <p>We average roughness weighting by each lobe and
+                        usually there is only one IOR per surface.</p>
+                        <aside class="notes">
+                            And that makes only 7 floats of proxy
+                            representation.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>Bump mapping</h3>
+                        <ul>
+                            <li>The proxy uses only one normal that spawns the
+                            four scattering axes</li>
+                            <li>This will fail if there are BSDF lobes with
+                            different bumped normals</li>
+                            <li>We compensate by expanding the roughness of the
+                            divergent lobes</li>
+                        </ul>
+                        <aside class="notes">
+                            Another issue we had to deal with is bump mapping
+                            if BSDFs are using different normals. We don't store
+                            them and have to use the same frame for all of them,
+                            so we need to compensate by growing the roughness of
+                            the divergent BSDFs. It is a rare case, but it can
+                            happen.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Look at the divergence</h3>
+                        <img data-src="img/bump.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <ul>
+                            <li>Assume the tangent of the divergence between normals
+                            lies at $2 \sigma$ of some distribution of slopes</li>
+                            <li>Add variance to the lobe's one to simulate
+                            convolution</li>
+                        </ul>
+                        <aside class="notes">
+                            So we look at the divergent normal and assume that
+                            its tangent is at two standard deviations from the
+                            mean of some imaginary distribution and we modify
+                            the roughness to simulate a convolution.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Dealing with GGX</h3>
+                        <ul>
+                            <li>Undefined variance (or mean)!</li>
+                            <li>Truncate to preserve 95% of mass</li>
+                            <li>We found $\sigma^2 = 2\alpha^2$ to fit the
+                            truncated variance</li>
+                            <li>Expanded roughness is $\alpha' = \sqrt{\frac{1}{8}\tan^2\theta_d +
+                            \alpha^2}$</li>
+                        </ul>
+                        <aside class="notes">
+                            Except GGX doesn't even have defined variance. But
+                            if we focus on 95% of the distribution mass we can
+                            measure a variance useful for our visual purpose.
+                            Then we pretend GGX has gaussian like properties and
+                            hapilly add variances to simulate convolution. This
+                            is the resulting expanded roughness to cover a
+                            divergent normal.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <h3>When is the proxy created?</h3>
+                    <ul>
+                        <li>After OSL execution, from the returned list of BSDFs</li>
+                        <li>BSDFs are called to accumulate into a common proxy</li>
+                        <li>A BSDF can choose any of the 4 groups and add weight to it</li>
+                        <li>... or more than one (ex. diffuse and reflection)</li>
+                    </ul>
+                    <aside class="notes">
+                        So we run the OSL shader or whatever is responsible for
+                        creating the BSDFs, and from those BSDFs we produce a
+                        proxy before we do any lighting. Each BSDF decides where
+                        it puts its energy in the proxy.
+                    </aside>
+                </section>
+                <section>
+                    <h3>How is the proxy evaluated?</h3>
+                    <ul>
+                        <li>Diffuse/translucent is a simple dot product</li>
+                        <li>Refl/refr evaluate a GGX <b>on the incoming direction</b></li>
+                        <ul>
+                            <li>$\frac{\mathrm{weight}}{\pi \alpha^2
+                            (\cos^2\theta + (\sin^2\theta)/\alpha^2)^2}$, easy
+                            from the dot product!</li>
+                        </ul>
+                        <li><b>Not the half vector</b>, which would take longer</li>
+                        <li>We need to transform the roughness to
+                        reflection/refraction space</li>
+                    </ul>
+                    <aside class="notes">
+                        Then we evaluate the proxy in the cheapest possible way.
+                        Diffuse is just a cosine, and for the other two lobes
+                        use a simplified GGX where we ignore the half vector
+                        transform. But we cannot just ignore the half-vector transform 
+						so instead we approximate it by tranforming the roughness to 
+                        the reflection and refraction space. 
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3>Transforming the roughness</h3>
+                         <img data-src="img/no_half_vector.svg"     width="25%" style="background:none; border:none; box-shadow:none; margin-bottom:0">
+                         <img data-src="img/half_vector.svg"        width="25%" class="fragment" style="background:none; border:none; box-shadow:none; margin-bottom:0" data-fragment-index="0">
+                         <img data-src="img/half_vector_approx.svg" width="25%" class="fragment" style="background:none; border:none; box-shadow:none; margin-bottom:0" data-fragment-index="1">
+
+                         <div style="position:relative">
+	                         <p class="fragment fade-out" style="position:absolute; margin-top:0" data-fragment-index="0"> Evaluating the GGX on the scattered direction bypasses the reflection/refraction distortion </p>
+	                         <span class="fragment fade-in" data-fragment-index="0">
+	                         	<p class="fragment fade-out" style="position:absolute; margin-top:0" data-fragment-index="1"> The half vector transform introduces scale and strech but the upper-bound is exactly 2.0 </p>
+	                         </span>
+	                         <p class="fragment fade-in" style="position:absolute; margin-top:0" data-fragment-index="1"> We scale the roughness/slopes by 2 (max 1D derivative) => conservative and cheap approximation!</p>
+	                     </div>
+                        <aside class="notes">
+                  
+                            In detail let's see what happens for the reflection case. On the left we have a GGX distribution 
+                            for 2 incoming directions and where we ignore the half vector tranform.  (next) We can see that it is quite different 
+							from what happens in reality with the half transform where the distribution is scaled and streched 
+	                        at the same time. However if we decompose
+                            the Jacobian of the transformation into two 1D derivatives we can determine that the scaling is bound exactly by a constant factor 2.
+                            (Next) So the idea is just to scale our roughness by 2 to match or cover the
+                            original distribution, giving us a cheap and conservative approximation for the half transform.
+                            
+                        </aside>
+                    </section>
+										<section>
+                        <h3>Transforming the roughness</h3>
+                         <img data-src="img/refr_no_half_vector.svg"     width="25%" style="background:none; border:none; box-shadow:none; margin-bottom:0">
+                         <img data-src="img/refr_half_vector.svg"        width="22%" style="background:none; border:none; box-shadow:none; margin-bottom:0">
+                         <img data-src="img/refr_half_vector_approx.svg" width="25%" style="background:none; border:none; box-shadow:none; margin-bottom:0">
+												  <p  style="margin-top:0"> Same approach for the refraction </p>
+												<aside class="notes">
+													
+                            For the refraction we use the same Jacobian decomposition approach resulting in the the following roughness scale formula.
+
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Use these roughness values</h3>
+                        <ul>
+                            <li>$\alpha_{rfl} = 2 \alpha$</li>
+                            <li>$\alpha_{rfr} = \frac{N\cdot \omega_t +
+                            \eta\ N\cdot\omega_o}{N\cdot \omega_t}\alpha$</li>
+                            <ul>
+                                <li>Same factor result as <q>Efficient Rendering of Layered
+                                    Materials using an Atomic Decomposition with
+                                    Statistical Operators</q> [Belcour 2018]</li>
+                            </ul>
+                        </ul>
+                        <p>We transform roughness after all BSDFs have
+                        accumulated to the proxy and before evaluation</p>
+                        <aside class="notes">
+                            Note that our scaling factors are exactly the same as the tangent derivative formula you can find in excellent Belcour's
+                            paper.
+							Note also that this scaling happens only once per proxy, after all BSDF have been accumulated.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>Accounting for low resolution</h3>
+                        <div style="position:relative">
+                        	<ul class="fragment fade-out" style="position:absolute; margin-left:auto; margin-right:auto; left:0 ;right:0; " data-fragment-index="0">
+                            	<li>Bound the cosine of the bounding cone for the pixels in the 12x12 upper level (0.944)</li>
+                        	</ul>
+                        	<img data-src="img/boundcone_1.svg" width="50%" class="fragment fade-out" style="background:none; border:none; box-shadow:none; position:absolute; top:100px"  data-fragment-index="0">
+                        	<img data-src="img/boundcone_2.svg" width="50%" class="fragment fade-in"  style="background:none; border:none; box-shadow:none; position:relative; top:100px"  data-fragment-index="0">
+                        	<ul class="fragment fade-in" style="position:absolute; margin-left:auto; margin-right:auto; left:0 ;right:0;" data-fragment-index="0">
+                        		<li>Subtract this angle when getting cosines from dot products (inexpensive)</li>
+                        	</ul>
+                        </div>
+                        <aside class="notes">
+                            There is one more limitation we have to be careful
+                            with: the low resolution of our 12x12 map for the
+                            product. So to deal with that we create a cone of confusion 
+                            around our patches. (Next) That is,  instead of evaluating the product in 
+							the center of our patch, we bring things to border by substrating the cone
+                            angle from our cosines.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Accounting for low resolution</h3>
+                        <ul>
+                        	<li>The resulting evaluation will be conservative, we won't
+                            miss a patch under the horizon</li>
+                        </ul>
+                        <img data-src="img/consclip.svg" class="stretch" style="background:none; border:none; box-shadow:none;">
+                        <aside class="notes">
+                            By doing this, our evaluation will be conservative in the sense that we won't understimate or miss a patch partially 
+                            under the horizon. And
+                            computing cosines of angle differences is an
+                            inexpensive trigonometric operation. Remember our
+                            whole proxy eval is based on a handful of cosines.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Accounting for low resolution</h3>
+                        <p>... and will prevent undersampling in lobe falloffs.</p>
+                        <img data-src="img/prod_center.svg" width="45%"  style="background:none; border:none; box-shadow:none; margin-right:50px">
+                        <img data-src="img/prod_conservative.svg" width="45%" style="background:none; border:none; box-shadow:none; ">
+                        <aside class="notes">
+                            The second advantage is that, it will
+                            maximizes the product evaluation, enforcing the
+                            generation of samples in the lobe falloffs as shown
+                            here in 1D. Other say, we prevent the undersampling
+                            of some regions that could arise from our coarse
+                            environment representation.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>But what if I want to use a different resolution?</h3>
+                        <p align="left" style="margin-left:-70px; margin-right:-70px ">Over 2 divisions, the bounding angle can be approximated as </p>
+												<p> $\theta = 4.154 / n - 2.012 / n^2$ </p>
+												<p align="left"  style="margin-left:-70px;"> where $n$ is the number of divisions, or just</p>
+												<p>$\cos\theta = \frac{(n - 2)^{3/2}}{(n - 2)^{3/2} + 1.77}$.</p>
+                        <aside class="notes">
+                            Just in case somebody needs this bounding cone for a
+                            different map resolution, these are good polynomial
+                            fits for the Clarberg mapping.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <section>
+                        <h3>Efficient implementation</h3>
+                        <ul>
+                            <li>Eval works with sines and cosines</li>
+                            <li>Dot products, sums, multiplications and a few square
+                            roots</li>
+                            <li>We use SSE4.2 to do 4 evals at a time and reduce 144
+                            evals to 36</li>
+                            <li>But you can do better, with AVX256, AVX512 or
+                            GPU!</li>
+                        </ul>
+                        <aside class="notes">
+                            Despite all these tricky details, our eval is just
+                            30 lines of dot products, three square roots and
+                            basic math. We use SSE to do four evals at a time,
+                            but of course that can be improved.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/synthetic.jpg" class="stretch">
+                        <p>In a synthetic scene overhead can reach 10% time</p>
+                        <aside class="notes">
+                            Here is some results. For simple synthetic scene like this we can measure a performance hit about 10%, although it can be worthwhile.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/bothead.jpg" class="stretch">
+                        <p>In simplified production assets it is down to 2% </p>
+                        <aside class="notes">
+                            But as the scene complexity grows the cost is
+                            amortized. In this simplified production asset it is down to 2% and sometimes the improvement is big.
+                        </aside>
+                    </section>
+                    <section>
+                        <img data-src="img/dogbot.jpg" class="stretch">
+                        <p>In final production performance hit is under 1%.</p>
+                        <aside class="notes">
+                            For a final frame the time difference is small
+                            enough that nobody complains.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <h3>In motion</h3>
+                    <video loop data-autoplay class="stretch" data-src="img/skydomebsdf_turntable.mp4"></video>
+                    <aside class="notes">
+                        This is a turntable comparison which should be available
+                        as supplemental material or as soon as we put this
+                        presentation online.
+                    </aside>
+                </section>
+                <section>
+                    <section>
+                        <h3> Summary </h3>
+                        <ul>
+                            <li> Practical sampling of product <b>IBL &#215 BSDF </b> </li>
+                            <ul>
+								<li> Two levels importance table</li>
+								<li> BSDF proxy </li>
+							</ul>
+								
+                            <li> Low computational overhead, production friendly </li>
+                            <li> Variance reduction in most production scenes </li>
+                        </ul>
+                        <aside class="notes">
+                            So this is a summary of the presented ideas. A
+                            practical product sampling scheme based on a two level importance table and 
+                            a BSDF proxy. All of it with low overhead in CPU.
+                            and memory.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3> Limitations </h3>
+                        <ul>
+                            <li> For light importance sampling only, still <b>MIS</b> based </li>
+                            
+                            <li> We still use the complex BSDF for surface importance sampling </li>
+                            <ul>
+                                <li> Fallback for high anisotropy or low roughness cases </li>
+                            </ul>
+                            <li> BSDF proxy is an approximation, not devised for shading (see [Belcour2018] for that) </li>
+ 
+                        </ul>
+                        <aside class="notes">
+                            The limitations are that we still rely on BSDF MIS
+                            forhighly anisotropic or very low roughness lobes. And of course, we
+                            don't recomend using our proxy for final shading. At
+                            least for primary rays.
+                        </aside>
+                    </section>
+                </section>
+                <section>
+                    <h3> Thanks for listening! </h3>
+                    <p>Questions?</p>
+                </section>
+			</div>
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info about config & dependencies:
+			// - https://github.com/hakimel/reveal.js#configuration
+			// - https://github.com/hakimel/reveal.js#dependencies
+			Reveal.initialize({
+				history: true,    // useful when editing to reload the current page instead of navigating from the beginning
+				slideNumer: true, // doesn't seem to show up.
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+                    { src: 'plugin/math/math.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } }
+				]
+			});
+		</script>
+	</body>
+</html>
