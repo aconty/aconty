@@ -1,4 +1,6 @@
-## Alejandro Conty (imageworks) Published Material
+## Alejandro Conty Estévez Published Material
+
+I'm a rendering engineer working at _Sony Pictures Imageworks_ in the in-house render engine _Arnold_. This is a list of the publications I have contributed to.
 
 | | |
 | ----- | ----- |
