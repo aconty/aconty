@@ -4,6 +4,7 @@ I'm a rendering engineer working at _Sony Pictures Imageworks_ in the in-house r
 
 | | |
 | ----- | ----- |
+| ![](img/many24.png) | [A Resampled Tree for Many Lights Rendering](manylights-siggraph2024.bib) (Siggraph 2024) _Alejandro Conty, Chris Hellmuth, Pascal Lecocq_ <br> *   Talk [abstract](pdf/s2024-manylights-abstract.pdf) <br> *   Supplemental [paper](pdf/s2024-manylights-supplemental.pdf) |
 | ![](img/caustics.png) | [Adaptive Caustics Rendering in Production with Photon Guiding](caustics-egsr2020.bib) (EGSR 2020) _Alejandro Conty, Christopher Kulla_ <br> *   Full [paper](pdf/production-caustics-egsr2020.pdf) <br> *   Recorded [talk](https://youtu.be/CAa2APz1hUc?t=52m) |
 | ![](img/bumpterminator.png) | [A Microfacet-Based Shadowing Function to Solve the Bump Terminator Problem](https://link.springer.com/chapter/10.1007/978-1-4842-4427-2_12) (Ray Tracing Gems 2019) _Alejandro Conty, Pascal Lecocq, Clifford Stein_ <br> *   Full paper [pre-print](pdf/bump-terminator-nvidia2019.pdf) |
 | ![](img/spi-arnold-tog.png) | [Sony Pictures Imageworks Arnold](https://dl.acm.org/citation.cfm?id=3180495) (ACM Transactions on Graphics 2018) _Christopher Kulla, Alejandro Conty, Clifford Stein, Larry Gritz_ <br> *   Full [paper](pdf/spi-arnold-tog.pdf) |
